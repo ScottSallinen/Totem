@@ -36,6 +36,9 @@ typedef struct graph500_state_s {
   frontier_state_t frontier_state;   // Frontier management state.
   bool      skip_gather;      // Whether to skip the gather in the round.
   vid_t*   local_to_global[MAX_PARTITION_COUNT];    // Local to global id map.
+  eid_t*   highest_subgraph;  // Reference to a subgraph of the highest degree
+                              // edge for each vertex.
+  bool     use_highest_subgraph;  // Whether to use the highst edge subgraph.
 } graph500_state_t;
 
 // State shared between all partitions.
@@ -120,7 +123,8 @@ PRIVATE void graph500_td_cpu(partition_t* par, graph500_state_t* state) {
 
 // A step that iterates across unvisited vertices and determines
 // their status in the next frontier.
-PRIVATE void graph500_bu_cpu(partition_t* par, graph500_state_t* state) {
+PRIVATE void graph500_bu_cpu(partition_t* par, graph500_state_t* state,
+                             int edge_offset) {
   graph_t* subgraph = &par->subgraph;
   bool finished = true;
   bitmap_t visited = state->visited[par->id];
@@ -135,7 +139,7 @@ PRIVATE void graph500_bu_cpu(partition_t* par, graph500_state_t* state) {
     if (bitmap_is_set(visited, vertex_id)) { continue; }
 
     // Iterate across the neighbours of this vertex.
-    for (eid_t i = subgraph->vertices[vertex_id];
+    for (eid_t i = subgraph->vertices[vertex_id] + edge_offset;
          i < subgraph->vertices[vertex_id + 1]; i++) {
       int nbr_pid = GET_PARTITION_ID(subgraph->edges[i]);
       vid_t nbr = GET_VERTEX_ID(subgraph->edges[i]);
@@ -159,6 +163,42 @@ PRIVATE void graph500_bu_cpu(partition_t* par, graph500_state_t* state) {
   if (!finished) *(state->finished) = false;
 }
 
+PRIVATE void graph500_bu_high_cpu(partition_t* par, graph500_state_t* state) {
+  graph_t* subgraph = &par->subgraph;
+  bool finished = true;
+  bitmap_t visited = state->visited[par->id];
+
+  // Locate the tree corresponding to our partition.
+  vid_t* tree = state->tree[par->id];
+
+  // Iterate across all of our vertices.
+  OMP(omp parallel for schedule(static) reduction(& : finished))
+  for (vid_t vertex_id = 0; vertex_id < subgraph->vertex_count; vertex_id++) {
+    // Ignore the local vertex if it has already been visited.
+    if (bitmap_is_set(visited, vertex_id)) { continue; }
+
+    const vid_t myedge = state->highest_subgraph[vertex_id];
+
+    int nbr_pid = GET_PARTITION_ID(myedge);
+    vid_t nbr = GET_VERTEX_ID(myedge);
+
+    // Check if the bitmap corresponding to the vertices PID is set.
+    // This means the partition that the vertex belongs to, has explored it.
+    if (bitmap_is_set(state->frontier[nbr_pid], nbr)) {
+      // Add the vertex we are exploring to the next frontier.
+      bitmap_set_cpu(visited, vertex_id);
+
+      // Add the vertex to the tree.
+      const vid_t* local_to_global = state->local_to_global[nbr_pid];
+      tree[vertex_id] = local_to_global[nbr];
+      finished = false;
+    }
+  }  // All vertices examined in level.
+
+  // Move over the finished variable.
+  if (!finished) *(state->finished) = false;
+}
+
 // This is a CPU version of the Bottom-up/Top-down BFS algorithm.
 // See file header for full details.
 void graph500_stepwise_cpu(partition_t* par, graph500_state_t* state) {
@@ -167,8 +207,15 @@ void graph500_stepwise_cpu(partition_t* par, graph500_state_t* state) {
   state->frontier[par->id] = state->frontier_state.current;
 
   if (state_g.bu_step) {
-    // Execute a bottom up step.
-    graph500_bu_cpu(par, state);
+    int edge_offset = 0;
+    if (state->use_highest_subgraph) { // && engine_superstep() == 2) {
+      // Compare first to the edge with the highest degree vertex.
+      STOPWATCH_FUNC(graph500_bu_high_cpu(par, state););
+      edge_offset = 1;
+    }
+    // Execute a bottom up step for the rest of the neighbours.
+    STOPWATCH_FUNC(graph500_bu_cpu(par, state, edge_offset););
+
   } else {
     // Copy the current state of the remote vertices bitmap.
     for (int pid = 0; pid < engine_partition_count(); pid++) {
@@ -923,6 +970,22 @@ PRIVATE inline void graph500_alloc_cpu(partition_t* par) {
   // Initialize our local frontier.
   frontier_init_cpu(&state->frontier_state, par->subgraph.vertex_count);
   state_g.tree_h[par->id] = state->tree[par->id];
+
+  // Allocate memory for the highest degree subgraph for the CPU.
+  state->use_highest_subgraph = true;
+  CALL_SAFE(totem_malloc(par->subgraph.vertex_count * sizeof(eid_t),
+                         TOTEM_MEM_HOST, (void**)&state->highest_subgraph));
+
+  // Build the highest degree subgraph.
+  // Note that this will ONLY work on graphs with no singletons.
+  for (vid_t v = 0; v < par->subgraph.vertex_count; v++) {
+    if (par->subgraph.vertices[v] - par->subgraph.vertices[v+1] == 0) {
+      // Found a singleton - method will not work.
+      state->use_highest_subgraph = false;
+    }
+    state->highest_subgraph[v] =
+        par->subgraph.edges[par->subgraph.vertices[v]];
+  }
 }
 
 void graph500_stepwise_alloc(partition_t* par) {
@@ -964,6 +1027,11 @@ void graph500_stepwise_free(partition_t* par) {
     totem_free(state_g.tree_h[par->id], TOTEM_MEM_HOST_PINNED);
   } else {
     assert(false);
+  }
+
+  // Free the highest degree subgraph.
+  if (par->processor.type == PROCESSOR_CPU) {
+    totem_free(state->highest_subgraph, TOTEM_MEM_HOST);
   }
 
   totem_free(state->tree[par->id], type);
