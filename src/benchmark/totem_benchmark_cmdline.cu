@@ -17,6 +17,7 @@ PRIVATE benchmark_options_t options = {
   omp_sched_guided,       // OMP scheduling.
   1,                      // Repeat.
   50,                     // Alpha.
+  0,                      // Lambda.
   PAR_RANDOM,             // Partitioning algorithm.
   GPU_GRAPH_MEM_DEVICE,   // Allocate gpu-based partitions on the device
   false,                  // Do not randomize vertex placement across
@@ -24,6 +25,7 @@ PRIVATE benchmark_options_t options = {
   false,                  // Vertex ids will not be sorted by edge degree.
   false,                  // Edges will be sorted by id by default.
   false,                  // Edges will be sorted ascending by default.
+  false,                  // Singletons will not be separate by default.
 };
 
 // A getter for a reference to the benchmark options.
@@ -52,6 +54,8 @@ PRIVATE void display_help(char* exe_name, int exit_err) {
          "     %d: Clustering Coefficient\n"
          "     %d: BFS stepwise\n"
          "     %d: Graph500 stepwise\n"
+         "  -c Creates a separate CPU partition to handle all singletons.\n"
+         "     (default FALSE)\n"
          "  -d Sorts the edges by degree instead of by vertex id.\n"
          "     (default FALSE)\n"
          "  -e Swaps the direction of edge sorting to be descending order.\n"
@@ -62,6 +66,9 @@ PRIVATE void display_help(char* exe_name, int exit_err) {
          "     %d: Random (default)\n"
          "     %d: High degree nodes on CPU\n"
          "     %d: Low degree nodes on CPU\n"
+         "  -lNUM [0-100] Redirects some of alpha to the opposing degree,\n"
+         "        enabling placement of each extreme on the GPU partitions.\n"
+         "        (default 0%%)\n"
          "  -mNUM Type of memory to use for GPU-based partitions\n"
          "     %d: Device (default)\n"
          "     %d: Host as memory mapped\n"
@@ -105,7 +112,7 @@ PRIVATE void display_help(char* exe_name, int exit_err) {
 benchmark_options_t* benchmark_cmdline_parse(int argc, char** argv) {
   optarg = NULL;
   int ch, benchmark, platform, par_algo, gpu_graph_mem;
-  while (((ch = getopt(argc, argv, "a:b:deg:i:m:op:qr:s:t:h")) != EOF)) {
+  while (((ch = getopt(argc, argv, "a:b:cdeg:i:l:m:op:qr:s:t:h")) != EOF)) {
     switch (ch) {
       case 'a':
         options.alpha = atoi(optarg);
@@ -121,6 +128,9 @@ benchmark_options_t* benchmark_cmdline_parse(int argc, char** argv) {
           display_help(argv[0], -1);
         }
         options.benchmark = (benchmark_t)benchmark;
+        break;
+      case 'c':
+        options.separate_singletons = true;
         break;
       case 'd':
         options.edge_sort_by_degree = true;
@@ -142,6 +152,13 @@ benchmark_options_t* benchmark_cmdline_parse(int argc, char** argv) {
           display_help(argv[0], -1);
         }
         options.par_algo = (partition_algorithm_t)par_algo;
+        break;
+      case 'l':
+        options.lambda = atoi(optarg);
+        if (options.lambda > 100 || options.lambda < 0) {
+          fprintf(stderr, "Invalid lambda value\n");
+          display_help(argv[0], -1);
+        }
         break;
       case 'm':
         gpu_graph_mem = atoi(optarg);
