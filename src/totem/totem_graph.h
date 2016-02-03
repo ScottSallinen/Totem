@@ -86,10 +86,10 @@ const uint32_t INFINITE = UINT32_MAX;
 
 // Specifies a type for edge weights. This is useful to allow future changes in
 // the precision and value range that edge weights can hold.
-typedef float weight_t;
+typedef uint32_t weight_t;
 
 // Specifies the maximum value a weight can hold.
-const weight_t WEIGHT_MAX = FLT_MAX;
+const weight_t WEIGHT_MAX = UINT32_MAX;
 
 // Specifies the default edge weight
 const weight_t DEFAULT_EDGE_WEIGHT =  1;
@@ -151,6 +151,9 @@ typedef struct graph_s {
   // necessary when freeing the buffer. Note that in this case, "edges" will
   // maintain the pointer to the buffer in the device address space.
   eid_t*    mapped_edges;
+  // Maintains the host pointer of the weights array in case it is allocated as
+  // a memory mapped buffer for GPU-resident graphs.
+  weight_t*    mapped_weights;
   // This member is relevant to GPU-based resident graphs. in case the edge list
   // is partitioned between device memory and mapped memory on the host, this
   // array stores the part of the edge list placed on the host as memory mapped,

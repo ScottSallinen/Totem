@@ -46,7 +46,7 @@ const double TRV_FRONTIER_SPARSE_THRESHOLD = .1;
  * frontier array, and should iterate over all the vertices. This value has
  * been determined experimentally.
  */
-const double TRV_MAX_FRONTIER_SIZE = .03;
+const double TRV_MAX_FRONTIER_SIZE = .1;
 
 /**
  * A type for page rank. This is useful to allow changes in precision.
@@ -163,6 +163,13 @@ error_t sssp_gpu(const graph_t* graph, vid_t src_id, weight_t* distance);
 error_t sssp_vwarp_gpu(const graph_t* graph, vid_t src_id,
                        weight_t* distance);
 error_t sssp_hybrid(vid_t src_id, weight_t* distance);
+
+/**
+ * Identifies the connected components in an undirected graph.
+ * @param[out] labels the id of the component the vertex belongs to.
+ * @return generic success or failure
+ */
+error_t cc_hybrid(vid_t* label);
 
 /**
  * Given a weighted graph \f$G = (V, E, w)\f$, the All Pairs Shortest Path
